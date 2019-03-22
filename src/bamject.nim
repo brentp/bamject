@@ -72,36 +72,66 @@ proc mutate_insertion*(m:Mutation, r:var Read, reference:RefGetter): bool =
   for i, op in r.cigar:
     if op.consumes.query:
       coff += op.len
-    if coff < offset or added:
+    if (op.consumes.reference and coff < offset) or added:
       if i == r.cigar.high:
         # truncate last cigar
         var n = L - (coff - op.len)
+        #echo "n:", n, "L:", L, "op:", op, " coff:", coff, " offset:", coff
+        #echo "cigar:", $cigarCopy
+        #echo "nup:", n
         cigarCopy.add(($n & $op.op).toCigar)
       else:
         cigarCopy.add(op)
-      if coff >= L: break
+      if coff >= L:
+        break
       continue
     if not op.consumes.reference:
+      ## hack to adjust for softclips before the event.
+      if not added:
+        coff -= op.len
+        L -= op.len
+      cigarCopy.add(op)
       continue
     added = true
-    #echo $op.op
-    var before = coff - op.len + offset
+    # added above to allow continue. subtract op.len here for
+    # more intuitive maths.
+    coff -= op.len
+    var before = offset - coff
+    #echo "coff:", coff, " before:", before
     if before > 0:
       cigarCopy.add(($before & $op.op).toCigar)
-    var left = op.len - (L - op.len + before)
-
-    if left + before < op.len:
-      cigarCopy.add(($(alt.len) & 'I').toCigar)
-      var n = if i == r.cigar.len - 1:
-        op.len - alt.len
-      else:
-        op.len - before
-      if coff - op.len + before + n + alt.len > L:
-        n = L - (coff - op.len + before + alt.len)
-      cigarCopy.add(($n & $op.op).toCigar)
-      break
+      coff += before
+    # now add the event.
+    # TODO: handle event at end which must be truncated.
+    if coff + alt.len <= L:
+      cigarCopy.add(($alt.len & 'I').toCigar)
     else:
-      cigarCopy.add(($left & 'I').toCigar)
+      cigarCopy.add(($(L - coff) & 'I').toCigar)
+    coff += alt.len
+    if coff >= L:
+      break
+
+    if before + alt.len < op.len:
+      var rem = op.len - before #- alt.len
+      #echo "coff:", coff, " rem:", rem, " alt.len:", " before:", before
+      if rem + coff > L:
+        rem = L - coff
+      if rem + coff - alt.len > op.len:
+        #echo "adj"
+        rem = op.len - coff
+      #echo "rem:", rem
+      cigarCopy.add(($rem & $op.op).toCigar)
+      coff += rem
+    else:
+      var rem = op.len - before
+      cigarCopy.add(($rem & $op.op).toCigar)
+      coff += rem
+    added = true
+    #echo "aa", $r.cigar
+
+    if coff >= L:
+      break
+    #echo $cigarCopy
 
   r.cigar = cigarCopy
 
@@ -112,8 +142,14 @@ proc mutate_deletion*(m:Mutation, r:var Read, reference:RefGetter): bool =
   var L = r.sequence.len
   if offset < 0:
     return
-  r.sequence = r.sequence[0..<offset] & r.sequence[offset + ref_allele.len  .. r.sequence.high]
+
   var dropped = ref_allele.len
+  if offset + ref_allele.len < r.sequence.len:
+    r.sequence = r.sequence[0..<offset] & r.sequence[offset + ref_allele.len  .. r.sequence.high]
+  else:
+    dropped = L - offset
+    r.sequence = r.sequence[0..<offset] #& r.sequence[offset + ref_allele.len  .. r.sequence.high]
+
   var seqadd = reference.get(&"{r.chrom}:{m.start+L-dropped+1}-{m.start+L}")
   r.sequence &= seqadd
   doAssert r.sequence.len == L
@@ -125,11 +161,15 @@ proc mutate_deletion*(m:Mutation, r:var Read, reference:RefGetter): bool =
   for i, op in r.cigar:
     if op.consumes.query:
       coff += op.len
-    if coff < offset or added:
+    if (op.consumes.reference and coff < offset) or added:
       cigarCopy.add(op)
       continue
 
-    if not op.consumes.reference: continue
+    if not op.consumes.reference:
+      coff -= op.len
+      L -= op.len
+      cigarCopy.add(op)
+      continue
     added = true
 
     var before = coff - op.len + offset
@@ -222,7 +262,7 @@ proc main*() =
       var after: string
       try:
         after = res[0].mutate_alignment(aln, fai)
-        aln.from_string(res[0].mutate_alignment(aln, fai))
+        aln.from_string(after)
       except:
         stderr.write_line "mutation:" & $res[0]
         stderr.write_line "before:" & before
