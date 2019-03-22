@@ -95,3 +95,53 @@ suite "bamjection":
     check $r.cigar == "51S2D86M"
 
 
+  test "another case":
+    var m = Mutation(chrom: "10", start: 89685265, alt: "T", reference: "TAAGG")
+    var reference = RG(sequence:"TCAAAGAGATCGTTAGCAGAAACAAAAGGAGATATCAAGAGGATGGATTCGACTTAGACTTGACCTGTATCCATTTCTGCGGCTGCTCCTCTTTACCTTTCTGTCACTCTCTTAGAACGTGGGAGTAGACGGATGCGAAAA", offset:89685265-1)
+    var r = Read(chrom:"10", start:89685158-1, cigar:"96M1I40M".toCigar, sequence:"ATTAGGAAAAAGAAAATCTGTCTTTTGGTTTTTCTTGATAGTATTAATGTAATTTCAAATGTTAGCTCATTTTTGTTAATGGTGGCTTTTTGTTTGTTTTGTTTTGTTTTAAGGTTTTTGGATTCAAAGCATAAAAA")
+    echo m
+    echo $r.cigar
+    discard m.mutate(r, reference)
+    echo $r.cigar
+
+  test "casexx":
+    var m = Mutation(chrom: "11", start: 533847, alt: "GGTCCCGCATGGCGCTGTACTC", reference: "G")
+    var r = Read(chrom: "11", start: 533787-1, cigar: "43M1D94M".toCigar, sequence:"AAAGACTTGGTGTTGTTGATGGCAAACACACACAGGAAGCCCTCCCGGTGCGCATGTACTGGTCCCGCATGGCGCTGTACTCCTCCTGGCCGGCGGTATCCAGGATGTCCAACAGGCACGTCTCCCCATCAATGACC")
+    var reference = RG(sequence:"")
+    discard m.mutate(r, reference)
+    echo $r.cigar
+
+  test "snp in complex cigar":
+    var m = Mutation(chrom: "13", start: 28602339, alt: "C", reference: "G")
+    var r = Read(chrom: "13", start: 28602200-1, cigar: "27M4D110M".toCigar, sequence: "TGACTGAGAAAAGACAAAGAATTAAAAAGAGAGAGAGAGAGAGAGCAAACATTCTCTTTGTCATCAAGCTACAGTCTTTTTGATGAGGTGATTTTCGTGGAAGTGGGTTACCTGACAGTGTGCACGCCCCCAGCAGG")
+
+    discard m.mutate_snp(r)
+    echo $r.cigar
+
+  test "end insertion":
+    var m = Mutation(chrom: "10", start: 89624240, alt: "CA", reference: "C")
+    var r = Read(chrom: "10", start: 89624104-1, cigar: "96M1D41M".toCigar, sequence:"GCAGAGCGAGGGGCATCAGCTACCGCCAAGTCCAGAGCCATTTCCATCCTGCAGAAGAAGCCCCGCCACCAGCAGCTTCTGCCATCTCTCTCCTCCTTTTCTTCAGCCACAGGCTCCCAGACATGACAGCCATCATC")
+    var reference = RG(sequence:"")
+    discard m.mutate(r, reference)
+    echo $r.cigar
+
+  test "another end insertion":
+    var m = Mutation(chrom: "10", start: 89624240, alt: "CA", reference: "C")
+    var r = Read(chrom: "10", start: 89624113-1, cigar:"36M1D96M5S".toCigar, sequence:"GGGGCATCAGCTACCGCCAAGTCCAGAGCCATTTCCTCCTGCAGAAGAAGCCCCGCCACCAGCAGCTTCTGCCATCTCTCTCCTCCTTTTTCTTCAGCCACAGGCTCCCAGACATGACAGCCATCATCAAAGNNNNN")
+    var reference = RG(sequence:"")
+    discard m.mutate(r, reference)
+    echo $r.cigar
+
+  test "anoter deletion":
+    var r = Read(chrom: "10", start: 89685129-1, cigar:"117M4D20M".toCigar, sequence:"TATTTATTTTCACTTAAATGGTATTTGAGATTAGGAAAAAGAAAATCTGTCTTTTGGTTTTTCTTGATAGTATTAATGTAATTTCAAATGTTAGCTCATTTTTGTTAATGGTGGCTTTTTGTTTGTTTTGTTTTAAG")
+    var m = Mutation(chrom: "10", start: 89685265, alt: "T", reference: "TAAGG")
+    var reference = RG(sequence:"TCAAAGAGATCGTTAGCAGAAACAAAAGGAGATATCAAGAGGATGGATTCGACTTAGACTTGACCTGTATCCATTTCTGCGGCTGCTCCTCTTTACCTTTCTGTCACTCTCTTAGAACGTGGGAGTAGACGGATGCGAAAA", offset:89685265-1)
+    discard m.mutate(r, reference)
+    echo $r.cigar
+
+  test "looong insertion":
+    var m = Mutation(chrom: "11", start: 533847, alt: "GGTCCCGCATGGCGCTGTACTC", reference: "G")
+    var r = Read(chrom:"11", start: 533734-1, cigar: "121M16S".toCigar, sequence:"GTGGGCTCCCGGGCCAGCCTCACGGGGTTCACCTGTACTGGTGGATGTCCTCAAAAGACTTGGTGTTGTTGATGGCAAACACACACAGGAAGCCCTCCCCGGTGCGCATGTACTGGTCCCGNNNNNNNNNNNNNNNN")
+    var reference = RG(sequence:"")
+    discard m.mutate(r, reference)
+    echo $r.cigar
