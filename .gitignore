@@ -1,2 +1,4 @@
 src/bamject
 src/cigar
+tests/test_bamject
+*.json

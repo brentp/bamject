@@ -1,3 +1,4 @@
+# vim: ts=2 sw=2 sts=2 sr et ai si
 import hts
 import lapper
 import random
@@ -6,6 +7,7 @@ import algorithm
 import sequtils
 import argparse
 import ./cigar
+export cigar
 import strutils
 import tables
 
@@ -13,23 +15,23 @@ type RefGetter* = concept i
   ## An object/tuple must implement these 2 methods to use this module
   get(i, string) is string
 
-type Mutation = object
-  chrom: string
-  start: int
-  alt: string
-  reference: string
+type Mutation* = object
+  chrom*: string
+  start*: int
+  alt*: string
+  reference*: string
 
 # satisfy nim-lapper interface.
-proc start(m:Mutation): int {.inline.} =
+proc start*(m:Mutation): int {.inline.} =
   return m.start
-proc stop(m:Mutation): int {.inline.} =
+proc stop*(m:Mutation): int {.inline.} =
   return m.start + m.reference.len
 
-type Read = object
-  chrom: string
-  start: int
-  sequence: string
-  cigar: seq[CigarElement]
+type Read* = object
+  chrom*: string
+  start*: int
+  sequence*: string
+  cigar*: seq[CigarElement]
 
 
 proc is_snp(m:Mutation): bool {.inline.} =
@@ -41,13 +43,13 @@ proc is_insertion(m:Mutation): bool {.inline.} =
 proc is_deletion(m:Mutation): bool {.inline.} =
   return m.reference.len > m.alt.len
 
-proc mutate_snp(m:Mutation, r:var Read): bool =
+proc mutate_snp*(m:Mutation, r:var Read): bool =
   doAssert m.is_snp
   var offset = m.start - r.start
   r.sequence[offset] = m.alt[0]
   return true
 
-proc mutate_insertion(m:Mutation, r:var Read, reference:RefGetter): bool =
+proc mutate_insertion*(m:Mutation, r:var Read, reference:RefGetter): bool =
   doAssert m.is_insertion
   var offset = m.start - r.start + 1
   var alt = m.alt[1..m.alt.high]
@@ -103,7 +105,7 @@ proc mutate_insertion(m:Mutation, r:var Read, reference:RefGetter): bool =
 
   r.cigar = cigarCopy
 
-proc mutate_deletion(m:Mutation, r:var Read, reference:RefGetter): bool =
+proc mutate_deletion*(m:Mutation, r:var Read, reference:RefGetter): bool =
   doAssert m.is_deletion
   var offset = m.start - r.start + 1
   var ref_allele = m.reference[1..m.reference.high]
@@ -139,7 +141,7 @@ proc mutate_deletion(m:Mutation, r:var Read, reference:RefGetter): bool =
 
   r.cigar = cigarCopy
 
-proc mutate(m:Mutation, r:var Read, reference:RefGetter): bool =
+proc mutate*(m:Mutation, r:var Read, reference:RefGetter): bool =
   ## mutate the read, adjusting the sequence and the cigar and the start if needed.
   doAssert m.chrom == r.chrom
   if m.is_snp:
@@ -165,6 +167,9 @@ proc readMutations(ivcf:VCF): TableRef[string, Lapper[Mutation]] =
   for v in ivcf:
     if $v.CHROM notin ivs:
       ivs[$v.CHROM] = newSeqOfCap[Mutation](1000)
+    if len(v.ALT) == 0:
+      stderr.write_line "[bamject] skipping variant with empty alternate allele:" & v.tostring()[0..<60]
+      continue
     ivs[$v.CHROM].add(Mutation(chrom: $v.CHROM, start: v.start, reference: $v.REF, alt: v.ALT[0]))
   result = newTable[string, Lapper[Mutation]]()
   for k, v in ivs.mpairs:
@@ -193,6 +198,7 @@ proc main*() =
     ibam:Bam
     fai:Fai
     ivcf:VCF
+    obam:Bam
   var af = parseFloat(opts.af)
   if not open(ibam, opts.bam, threads=3, index=true, fai=opts.fasta):
     quit "couldn't open bam file"
@@ -200,79 +206,30 @@ proc main*() =
     quit "couldn't open vcf file"
   if not open(fai, opts.fasta):
     quit "couldn't open fasta file"
+  if not open(obam, "bamject.bam", mode="wb"):
+    quit "couldn't open output bam file"
 
   var mutationsByChrom = readMutations(ivcf)
   ivcf.close()
-  randomize(40)
 
-  echo $ibam.hdr
+  #randomize(40)
+  obam.write_header(ibam.hdr)
 
   var res = newSeqOfCap[Mutation](2)
   for aln in ibam:
     if ($aln.chrom in mutationsByChrom) and mutationsByChrom[$aln.chrom].find(aln.start, aln.stop, res) and random(1'f) < af:
-      echo res[0].mutate_alignment(aln, fai)
-      continue
-    echo aln.tostring()
+      var before = aln.tostring
+      var after: string
+      try:
+        after = res[0].mutate_alignment(aln, fai)
+        aln.from_string(res[0].mutate_alignment(aln, fai))
+      except:
+        stderr.write_line "mutation:" & $res[0]
+        stderr.write_line "before:" & before
+        stderr.write_line "after:" & after
+        raise
 
+    obam.write(aln)
 
 when isMainModule:
-  import unittest
-
   main()
-
-#[
-proc test() =
-
-  # met refgetter for testing.
-  type RG = object
-    sequence: string
-
-  proc get(r:RG, region:string): string =
-    var pos = region.split(':')
-    var se = pos[1].split('-')
-    return r.sequence[parseInt(se[0])-1..<parseInt(se[1])]
-
-  suite "bamjection":
-    test "test simple snp injection":
-      var r = Read(chrom:"1", start: 1, sequence: "AAAAA", cigar:"5M".toCigar)
-      var m = Mutation(chrom:"1", start: 3, alt: "C", reference:"A")
-      var reference = RG(sequence:"AAAAAA")
-      discard m.mutate(r, reference)
-      check r.sequence == "AACAA"
-
-    test "test simple insertion injection":
-      var r = Read(chrom:"1", start: 0, sequence: "AAAAA", cigar:"5M".toCigar)
-      var m = Mutation(chrom:"1", start: 2, alt: "ATC", reference:"A")
-      var reference = RG(sequence:"AAAAAA")
-      discard m.mutate(r, reference)
-      doAssert r.sequence == "AAATC"
-      check $r.cigar == "3M2I"
-
-      r = Read(chrom:"1", start: 0, sequence: "AAAAA", cigar:"5M".toCigar)
-      m = Mutation(chrom:"1", start: 3, alt: "ATC", reference:"A")
-      discard m.mutate(r, reference)
-      doAssert r.sequence == "AAAAT"
-      check $r.cigar == "4M1I"
-
-      r = Read(chrom:"1", start: 4, sequence: "AAAAAC", cigar: "5M1I".toCigar)
-      m = Mutation(chrom:"1", start: 3, alt: "ATC", reference:"A")
-      discard m.mutate(r, reference)
-      check r.sequence == "TCAAAA"
-      check $r.cigar == "2I4M"
-
-
-      r = Read(chrom:"1", start: 4, sequence: "AAAAAC", cigar: "4M1I1M".toCigar)
-      m = Mutation(chrom:"1", start: 6, alt:    "ATC", reference:"A")
-                                              #3M2I1M
-      discard m.mutate(r, reference)
-      check r.sequence == "AAATCA"
-      check $r.cigar == "3M2I1M"
-
-    test "test simple deletion injection":
-      var r = Read(chrom:"1", start: 0, sequence: "AAAAACT", cigar:"7M".toCigar)
-      var m = Mutation(chrom:"1", start: 2, alt:     "A", reference:"AAA")
-      var reference = RG(sequence:"AAAAACTGG")
-      discard m.mutate(r, reference)
-      check r.sequence == "AAACTGG"
-      check $r.cigar == "3M2D4M"
-]#
