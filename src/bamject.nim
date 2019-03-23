@@ -276,8 +276,24 @@ proc mutate_general*(m:Mutation, r:var Read, reference:RefGetter): bool =
     if r.sequence.len > L:
       r.sequence = r.sequence[0..<L]
       newCigar.add(($(L - query_offset + op.len - before) & 'I').toCigar)
+    else:
+      var opL = if m.is_deletion: 'D' else: 'I'
+      var size = abs(m.alt.len - m.reference.len)
+      newCigar.add(($size & opL).toCigar)
+      if opL == 'D':
+        ref_offset += size
 
   r.cigar = newCigar
+  if r.sequence.len < L:
+    echo "ref_offset:", ref_offset, " r.start:", r.start
+    echo "seq before:", r.sequence
+    var rstart = r.start + ref_offset - (m.alt.len)
+    var ln = L - r.sequence.len
+    echo "ln:", ln
+    var seqadd = reference.get(&"{r.chrom}:{rstart}-{rstart+ln-1}")
+    echo "seqadd:", seqadd
+    r.sequence &= seqadd
+
 
 
 proc mutate*(m:Mutation, r:var Read, reference:RefGetter): bool =

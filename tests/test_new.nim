@@ -38,3 +38,12 @@ suite "bamjection":
     discard m.mutate(r, reference)
     check r.sequence == "AAAAT"
     check $r.cigar == "4M1I"
+
+  test "test simple deletion injection":
+    var r = Read(chrom:"1", start: 0, sequence: "AAAAACT", cigar:"7M".toCigar)
+    var m = Mutation(chrom:"1", start: 2, alt:    "A", reference:"AAA")
+    var reference = RG(sequence:"AAAAACTGG")
+    discard m.mutate(r, reference)
+    check r.sequence == "AAACTGG"
+    check $r.cigar == "3M2D4M"
+
