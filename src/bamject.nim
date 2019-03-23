@@ -21,6 +21,8 @@ type Mutation* = object
   alt*: string
   reference*: string
 
+proc `$`*(m:Mutation): string =
+  return &"Mutation(chrom:\"{m.chrom}\", start:{m.start}, alt:\"{m.alt}\", reference:\"{m.reference}\")"
 # satisfy nim-lapper interface.
 proc start*(m:Mutation): int {.inline.} =
   return m.start
@@ -33,7 +35,6 @@ type Read* = object
   sequence*: string
   cigar*: seq[CigarElement]
 
-
 proc is_snp(m:Mutation): bool {.inline.} =
   return m.alt.len == 1 and m.reference.len == 1
 
@@ -42,6 +43,12 @@ proc is_insertion(m:Mutation): bool {.inline.} =
 
 proc is_deletion(m:Mutation): bool {.inline.} =
   return m.reference.len > m.alt.len
+
+proc opchar*(m:Mutation): char {.inline.} =
+  if m.is_snp: return 'X'
+  if m.is_deletion: return 'D'
+  if m.is_insertion: return 'I'
+  return '?'
 
 proc mutate_snp*(m:Mutation, r:var Read): bool =
   doAssert m.is_snp
@@ -239,7 +246,7 @@ proc mutate_deletion*(m:Mutation, r:var Read, reference:RefGetter): bool =
 proc mutate_general*(m:Mutation, r:var Read, reference:RefGetter): bool =
   ## we view a mutation as a loss of the reference and a gain of the alternate
   # so we first remove the reference and then we add the alternate.
-
+  #
   var
     query_offset = 0
     ref_offset = r.start
@@ -258,9 +265,14 @@ proc mutate_general*(m:Mutation, r:var Read, reference:RefGetter): bool =
       continue
 
     var overshot = ref_offset - m.start #- delta
+    echo "overshot:", overshot, " query_offset:", query_offset
 
     # remove the allele from the reference
-    r.sequence = r.sequence[0..<(query_offset-overshot)] & m.alt & r.sequence[(query_offset-overshot+m.reference.len)..r.sequence.high]
+    if query_offset - overshot >= 0:
+      r.sequence = r.sequence[0..<(query_offset-overshot)] & m.alt & r.sequence[(query_offset-overshot+m.reference.len)..r.sequence.high]
+    else:
+      var off = overshot - query_offset
+      r.sequence = r.sequence[0..<max(0, query_offset-overshot)] & m.alt[off..m.alt.high] & r.sequence[(query_offset-overshot+m.reference.len)..r.sequence.high]
     added = true
 
     # don't need to update cigar string for snp
@@ -272,23 +284,49 @@ proc mutate_general*(m:Mutation, r:var Read, reference:RefGetter): bool =
     # add 1 because the alt is e.g. 3 bases to indicate a 2-base deletion
     var before = op.len - overshot + 1
 
-    newCigar.add(($before & $op.op).toCigar)
-    if r.sequence.len > L:
+    if before > 0:
+      newCigar.add(($before & $op.op).toCigar)
+
+    if query_offset - overshot < 0:
+      newCigar.add(($(m.alt.len - 1) & m.opchar).toCigar)
+      var right_side = op.len - before
+      if right_side > 0:
+        newCigar.add(($right_side & $op.op).toCigar)
+
+    elif r.sequence.len > L:
+      echo "TODO: brent start here. need to shorten this as needed.", newCigar
       r.sequence = r.sequence[0..<L]
-      newCigar.add(($(L - query_offset + op.len - before) & 'I').toCigar)
+      #if newCigar.len == 0:
+
+      echo "op.len:", op.len, " before: ", before, " query_offset:", query_offset, " back:", back, " r.sequence:", r.sequence
+      echo "r.cigar:", r.cigar, " m:", m
+      var size = min(m.alt.len - 1, L - query_offset + op.len - before)
+      newCigar.add(($size & 'I').toCigar)
+      var right_side = op.len - before
+      newCigar.add(($right_side & $op.op).toCigar)
+
     else:
-      var opL = if m.is_deletion: 'D' else: 'I'
       var size = abs(m.alt.len - m.reference.len)
-      newCigar.add(($size & opL).toCigar)
-      if opL == 'D':
+      newCigar.add(($size & m.opchar).toCigar)
+      if m.is_deletion:
         ref_offset += size
+        var right_side = op.len - before
+        if right_side > 0:
+          newCigar.add(($right_side & $op.op).toCigar)
+
+  var rl = newCigar.read_length
+  if rl != L:
+    newCigar.shorten_to(L)
+  if r.sequence.len > L:
+    r.sequence = r.sequence[0..<L]
 
   r.cigar = newCigar
   if r.sequence.len < L:
     echo "ref_offset:", ref_offset, " r.start:", r.start
     echo "seq before:", r.sequence
-    var rstart = r.start + ref_offset - (m.alt.len)
+    var rstart = ref_offset - (m.alt.len)
     var ln = L - r.sequence.len
+    echo "rstart:", rstart
     echo "ln:", ln
     var seqadd = reference.get(&"{r.chrom}:{rstart}-{rstart+ln-1}")
     echo "seqadd:", seqadd
